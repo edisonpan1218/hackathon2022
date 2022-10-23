@@ -16,6 +16,14 @@ int abs(int x){
     if(x < 0) return -x;
     return x;
 }
+double double_abs(double x){
+    if(x >= 0) return x;
+    return -x;
+}
+double equals_to_zero(double x){
+    if(double_abs(x) <= 0.00000001) return 0.0;
+    return x;
+}
 struct data{
     string ID;
     double price, size, size_in_quote;
@@ -35,17 +43,11 @@ bool operator<(item_data a, item_data b){
 }
 
 vector<data> trade;
+double amount;
 double profit;
 double money;
-
-void buy(int index){
-    money -= trade[index].price * trade[index].size;
-    times ++;
-}
-
-void sell(int index, int Size){
-    money += Size * trade[index].price;
-}
+double total_fee;
+double total_buy_quote;
 
 double size(int index){
     return (double)(trade[index].size);
@@ -55,7 +57,96 @@ double price(int index){
     return (double)(trade[index].price);
 }
 
+double slippage(int index)
+{
+    srand( time(NULL) );
+    double positive_effect=0.5;
+    double fortune=0;
+    double value=0;
+    positive_effect+=  ( 0.5- 0.0001) * rand() / (RAND_MAX + 1.0) + 0.0001;
+    fortune+=( 1- 0.0001) * rand() / (RAND_MAX + 1.0) + 0.0001;
+     if(fortune>=positive_effect)
+     {
+         double x = (double) rand() / (RAND_MAX + 1.0); //0~1
+
+         if(x>=0.5)
+         {
+             value=1;
+         }
+         else if(x>0.5 && 0.7>x )
+         {
+             value=0.99;
+         }
+         else if(x>0.7 && 0.8>x )
+         {
+             value=0.98;
+         }
+         else
+         {
+             value=0.97;
+         }
+
+     }
+     else
+    {
+        double x = (double) rand() / (RAND_MAX + 1.0);
+
+         if(x>=0.5)
+         {
+             value=1;
+         }
+         else if(x>0.5 && 0.7>x )
+         {
+             value=1.01;
+         }
+         else if(x>0.7 && 0.8>x )
+         {
+             value=1.02;
+         }
+         else
+         {
+             value=1.03;
+         }
+     }
+     return(double)(value);
+}
+
+double additional_fee()
+{
+    int vip_level=1;
+    double fee_rate=0.00075;
+    while(vip_level<9)
+    {
+        if(total_buy_quote/vip_level>1000000)
+        {
+            vip_level++;
+            fee_rate-=0.000075;
+        }
+        else break;
+    }
+
+
+    return(double)(fee_rate);
+}
+
+void buy(int index){
+    double p = price(index) * slippage(index);
+    total_buy_quote += p * size(index);
+    money -= p * size(index);
+    money -= additional_fee() * p * size(index);
+    total_fee += additional_fee() * p * size(index);
+    amount += size(index);
+    times ++;
+}
+
+void sell(double now_price, double Size){   // (slippage(index) * price(now_loc), Size)
+    money += Size * now_price;
+    amount -= Size;
+    total_fee += additional_fee() * now_price * Size;
+}
+
 void get_data(int m){
+    int i;
     fstream file;
     file.open("BTCUSDT-trades-2022-10-19.csv");
     string line;
@@ -68,7 +159,6 @@ void get_data(int m){
             S += s;
             S += " ";
         }
-        cout << S << '\n';
         stringstream ss;
         ss << S;
         string ID;
@@ -81,12 +171,7 @@ void get_data(int m){
         ss >> trade_time;
         ss >> Can_buy;
         ss >> ignore;
-  //      cout << fixed << setprecision(5) << "pb(" << ID << ", " << price << ", " << size << ", " << size_in_quote << ", " << trade_time << ", " << Can_buy << ", true)\n";
         trade.push_back({ID, price, size, size_in_quote, trade_time, (Can_buy == "True" ? false : true), true});
-        
-        
-        
-    //    cout << S << '\n';
         loc ++;
     }
     file.close();
@@ -98,47 +183,34 @@ void period(int n, int m){
     double w = 1;
     double plus = 0.1;
     double sum = 0.0, weighted_sum = 0.0, last;
-    double last_price;
+    double last_price = 0.0;
     last = w;
     while(now_loc < n){
         now_loc ++;
         weighted_sum += w * price(now_loc);
-    //    sum += price(now_loc);
         q.push(w);
-    //    cout << "w = " << w << '\n';
-        
         w_sum += w;
         w += plus;
         plus += 0.1;
     }
- 
     while(now_loc < m){
         Max = max(Max, abs(money));
         now_loc ++;
         if(now_loc == m) last_price = price(now_loc);
         double price_base = weighted_sum / (double)w_sum;
+        
+        
         if(trade[now_loc].Can_buy && price(now_loc) <= price_base){  // buy
             buy(now_loc);
             item.insert({price(now_loc), size(now_loc)});
         }
         else if(!trade[now_loc].Can_buy && price(now_loc) >= price_base){
-            double remain_size = size(now_loc);
-            while(item.size() > 0 && remain_size > 0.0){
-                auto it = item.begin();
-                if(it->price > price(now_loc)) break; // if the items we have are more expensive, then don't sell them.
-                if(it->size <= remain_size){   // if buyer's needings are more than the items we have, sell them all.
-                    profit += (price(now_loc) - it->price) * it->size;
-                    remain_size -= it->size;
-                    item.erase(it);
-                }
-                else {
-                    profit += (price(now_loc) - it->price) * it->size;
-                    remain_size = 0;
-                    item_data New_item = {it->price, it->size - remain_size};
-                    item.erase(it);
-                    item.insert(New_item);
-                    break;
-                }
+            
+            if(amount <= size(now_loc)){ // I can sell all items I have
+                sell(slippage(now_loc) * price(now_loc), amount);
+            }
+            else { // Can only sell partial items
+                sell(slippage(now_loc) * price(now_loc), size(now_loc));
             }
         }
         // sell or buy
@@ -146,7 +218,6 @@ void period(int n, int m){
         
         
         weighted_sum += w * price(now_loc);
-     //   cout << "w = " << w << '\n';
         double last_w = q.front();
         q.pop();
         q.push(w);
@@ -155,66 +226,144 @@ void period(int n, int m){
         w += plus;
         w_sum -= last_w;
         plus += 0.1;
-    //    sum = sum - price(now_loc - n) + price(now_loc);
     }
-    cout << "last_price = " << last_price << '\n';
-    if(item.size() > 0){
-        for(auto it = item.begin(); it != item.end(); it ++){
-            money += last_price * (it->size);
+    money += slippage(m) * amount * last_price;
+    total_fee += additional_fee() * last_price * amount;
+}
+/*
+void up (int n,int m,int k,int l)
+{
+
+    auto it = item.begin();
+    for(int i=1;i<=n;i=k)
+    {
+        double remain_size = size(i);
+        for(int j=i+1;j<i+m+1;j++)
+        {
+            if(price(i+1)-price(i)<=0)
+            {
+                k=i;
+                break;
+            }
+            else
+            {
+                buy(i);
+                item.insert({price(i), size(i)});
+                k+=m+l;
+                sell(k, );
+            }
         }
-        item.clear();
     }
 }
+void down (int n,int m,int k,int l) //n = size of data, m = consecutive decrease amount, k = next node, l = 過多少時間買進
+{
+    auto it = item.begin();
+    for(int i=1;i<=n;i=k)
+    {
+        double remain_size = size(i);
+        for(int j=i+1;j<i+m+1;j++)
+        {
+            if(price(i+1)-price(i)>=0)
+            {
+                k=i;
+                break;
+            }
+            else
+            {
+                sell(i);
+                item.insert({price(i), size(i)});
+                k+=m+l;
+            }
+        }
+    }
+}
+ */
 
 
-void up (int n,int m){ //n is the big range, m is the small range
-    int pos = 1;
-    double remain_size = size(pos);
-    bool checksell = 0;
-    while(pos <= n){
-        if(!checksell){
-            bool counter = 1;
-            int pos_copy = pos;
-            for(int j = pos_copy + 1; j < pos_copy + m + 1; j++){
-                if(j == n){
-                    pos = j;
-                    break;
-                }
-                if(price(j) - price(j - 1) <= 0){
-                    counter = 0;
-                    break;
-                }
-                pos++;
+
+void period_SMA(int n, int m, double up_pointer, double down_pointer){
+    queue<double> dif_queue;
+    int i, now_loc = 1;
+    double last_price = price(now_loc);
+    double up_ratio_sum = 0, down_ratio_sum = 0;
+    while(now_loc <= n){
+        now_loc ++;
+        double dif = price(now_loc) - last_price;
+        double dif_ratio = dif / last_price;
+    //    cout << fixed << setprecision(10) << dif << " / " << last_price << " = " << dif_ratio << '\n';
+        dif_queue.push(dif_ratio);
+        if(price(now_loc) >= last_price) up_ratio_sum += dif_ratio;
+        else down_ratio_sum += double_abs(dif_ratio);
+        last_price = price(now_loc);
+        // calculate initial RSI
+    }
+    bool If_Sell = false, If_Buy = false;
+    while(now_loc < m){
+        now_loc ++;
+        double dif = price(now_loc) - last_price;
+        double dif_ratio = dif / last_price;
+        double up_ratio_ave = up_ratio_sum / (double)n;
+        double down_ratio_ave = down_ratio_sum / (double)n;
+        double RSI = equals_to_zero((up_ratio_ave) / (up_ratio_ave + down_ratio_ave));
+   //     cout << fixed << setprecision(5) <<  " RSI = " << RSI << '\n';
+        
+        // update RSI
+        if(price(now_loc) >= last_price) up_ratio_sum += dif_ratio;
+        else down_ratio_sum += double_abs(dif_ratio);
+        dif_queue.push(dif_ratio);
+        
+        
+        double oldest_ratio = dif_queue.front();
+        dif_queue.pop();
+        if(oldest_ratio >= 0) up_ratio_sum -= oldest_ratio;
+        else down_ratio_sum -= double_abs(oldest_ratio);
+        
+        last_price = price(now_loc);
+        
+        
+        if(If_Buy){
+            if(trade[now_loc].Can_buy){
+                buy(price(now_loc));
+                If_Buy = false;
             }
-            if(counter){
-                buy(pos);
-                item.insert({price(pos), size(pos)});
-                checksell = 1;
-                remain_size = size(pos);
-            }
-        }//buy
-        if(checksell){
-            while(item.size() > 0 && remain_size > 0.0){
-                auto it = item.begin();
-                if(it->size <= remain_size){   // if buyer's needings are more than the items we have, sell them all.
-                    profit += (price(pos) - it->price) * it->size;
-                    remain_size -= it->size;
-                    item.erase(it);
-                    checksell = 0;
-                    pos++;
+            else continue;
+        }  // (slippage(index) * price(now_loc), Size)
+        else if(If_Sell){
+            if(!trade[now_loc].Can_buy){
+                if(amount <= size(now_loc)){ // I can sell all items I have
+                    sell(slippage(now_loc) * price(now_loc), amount);
+                    If_Sell = false;
                 }
-                else{
-                    profit += (price(pos) - it->price) * it->size;
-                    remain_size = 0;
-                    item_data New_item = {it->price, it->size - remain_size};
-                    item.erase(it);
-                    item.insert(New_item);
-                    pos++;
-                    break;
+                else { // Can only sell partial items
+                    sell(slippage(now_loc) * price(now_loc), size(now_loc));
+                }
+            }
+        }
+        else {
+            if(RSI <= down_pointer) {
+                If_Buy = true;
+                if(trade[now_loc].Can_buy){
+                    buy(price(now_loc));
+                    If_Buy = false;
+                }
+                else continue;
+            }
+            else if(RSI >= up_pointer && amount > 0.0) {
+                If_Sell = true;
+                if(!trade[now_loc].Can_buy){
+                    if(amount <= size(now_loc)){ // I can sell all items I have
+                        sell(slippage(now_loc) * price(now_loc), amount);
+                        If_Sell = false;
+                    }
+                    else { // Can only sell partial items
+                        sell(slippage(now_loc) * price(now_loc), size(now_loc));
+                    }
                 }
             }
         }
     }
+    money += slippage(m) * amount * last_price;
+    total_fee += additional_fee() * last_price * amount;
 }
 
 void _up(int n,int m){ //n is the big range, m is the small range
@@ -222,20 +371,18 @@ void _up(int n,int m){ //n is the big range, m is the small range
     double remain_size = 0, buy_price = 0;
     bool checksell = 0;
     for(int i = 1; i <= n; i = k){
-        //cout << "k = " << k << '\n';
         if(!checksell){
+        //    cout << "1\n";
             bool change = false, counter = true;
             for(int j = i + 1; j < i + m + 1; j++){
                 if(j == n){
                     k = n;
-                    //cout << "1\n";
                     change = true;
                     counter = false;
                     break;
                 }
                 if(price(j) - price(j - 1) <= 0){
                     k = j;
-                    //cout << "2\n";
                     change = true;
                     counter = false;
                     break;
@@ -246,43 +393,48 @@ void _up(int n,int m){ //n is the big range, m is the small range
                 buy_price = price(k);
                 checksell = 1;
                 remain_size = size(k);
+                k++;
                 continue;
             }
-            if(!change) k++;
+            else if(!change) k++;
         }//buy
-        
         if(checksell && trade[i].Can_buy){
+            k ++;
+        }
+        if(checksell && !trade[i].Can_buy){
             if(remain_size > 0.0){
                 if(remain_size >= size(i)){
-                    sell(i, size(i));
+                    sell(slippage(i) * price(i), size(i));
                     remain_size -= size(i);
                 }
                 else{
-                    sell(i, remain_size);
+                    sell(slippage(i) * price(i), remain_size);
                     remain_size = 0;
                     checksell = 0;
                 }
-                k++;
             }
+            k ++;
         }
     }
     sell(n, remain_size);
 }
 
-
-
 int main(){
     
+    amount = 0;
     Max= 0;
     profit = 0.0;
     money = 0.0;
+    total_buy_quote = 0.0;
+    total_fee = 0.0;
     trade.push_back({"", 0.0, 0.0, 0.0, "", "false", "false"});
     get_data(100000);
     item.clear();
-    period(10, 10000);
+ //   period_SMA(5, 10000, 0.55, 0.45);
+ //   _up(10000, 6);
+    period(1000, 10000);
     cout << fixed << setprecision(5) << "money = " << money << '\n';
-    cout << profit << '\n';
-    cout << Max << '\n';
-    cout << fixed << setprecision(2) << profit / Max << '\n';
-    cout << "times = " << times << '\n';
+    cout << "buying times = " << times << '\n';
+    cout << "total buy quote = " << total_buy_quote << '\n';
+    cout << "total fee = " << total_fee << '\n';
 }
